@@ -66,6 +66,7 @@ function renderAuth() {
       ${!isProfile ? `<div class="auth-tabs"><button class="${authMode === "login" ? "active" : ""}" data-auth-mode="login">Sign in</button><button class="${authMode === "signup" ? "active" : ""}" data-auth-mode="signup">Create account</button></div>` : ""}
       ${isSignup ? `<div class="role-select" role="group" aria-label="Choose account type"><button data-role="restaurant" class="${authRole === "restaurant" ? "selected" : ""}"><span>♧</span><b>Restaurant</b><small>Share surplus food</small></button><button data-role="partner" class="${authRole === "partner" ? "selected" : ""}"><span>♡</span><b>Community partner</b><small>Find and collect food</small></button></div>` : ""}
       <form id="authForm" class="auth-form">
+        ${isProfile ? `<label>Account email<input name="email" type="email" required value="${esc(profileDraft.email || "")}" placeholder="you@example.com" autocomplete="email"></label>` : ""}
         ${isSignup ? `<label>${authRole === "restaurant" ? "Restaurant or business name" : "Organization name"}<input name="name" required value="${esc(profileDraft.name || "")}" placeholder="${authRole === "restaurant" ? "e.g. Green Basket Market" : "e.g. Amara's Community Kitchen"}" autocomplete="organization"></label>` : ""}
         ${isSignup ? `<label>Phone number <span class="optional">Optional</span><input name="phone" type="tel" value="${esc(profileDraft.phone || "")}" autocomplete="tel" placeholder="+91 98765 43210"></label>` : `<p class="field-hint">You’ll enter your email and password on Cognito’s secure sign-in page.</p>`}
         ${isSignup ? `<div class="form-section-label"><span>Pickup area</span><i></i></div><div class="field-grid"><label>City<input name="city" required value="${esc(profileDraft.city || "")}" placeholder="Bengaluru" autocomplete="address-level2"></label><label>Postal code <span class="optional">Optional</span><input name="postalCode" value="${esc(profileDraft.postalCode || "")}" placeholder="560001" autocomplete="postal-code"></label></div>${authRole === "restaurant" ? `<label>Restaurant pickup address<input name="address" required value="${esc(profileDraft.address || "")}" placeholder="Street address, building, area" autocomplete="street-address"></label><div class="field-grid coordinate-grid"><label>Latitude <span class="optional">Map pin</span><input name="latitude" type="number" step="any" value="${esc(profileDraft.latitude || "")}" placeholder="12.9716"></label><label>Longitude <span class="optional">Map pin</span><input name="longitude" type="number" step="any" value="${esc(profileDraft.longitude || "")}" placeholder="77.5946"></label></div><button type="button" class="location-detect" data-geolocate>⌖ Use device location</button>` : ""}` : ""}
@@ -312,7 +313,7 @@ document.addEventListener("submit", async (event) => {
         await beginSignIn();
         return;
       }
-      body.email = (await auth.getUser())?.profile?.email || "";
+      body.email = (await auth.getUser())?.profile?.email || body.email || "";
       const result = await api("/me", { method: "POST", body: JSON.stringify({ ...body, role: authRole }) });
       currentUser = result.user;
       sessionStorage.removeItem("goodtable:profile-draft");
@@ -365,6 +366,7 @@ try {
     } catch (error) {
       if (error.status !== 404 || !error.payload?.profileRequired) throw error;
       try { profileDraft = JSON.parse(sessionStorage.getItem("goodtable:profile-draft") || "{}"); } catch { profileDraft = {}; }
+      profileDraft.email ||= error.payload.email || cognitoUser.profile?.email || "";
       authRole = profileDraft.role || "partner";
       authMode = "profile";
       renderAuth();
