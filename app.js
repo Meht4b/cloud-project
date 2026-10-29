@@ -312,6 +312,7 @@ document.addEventListener("submit", async (event) => {
         await beginSignIn();
         return;
       }
+      body.email = (await auth.getUser())?.profile?.email || "";
       const result = await api("/me", { method: "POST", body: JSON.stringify({ ...body, role: authRole }) });
       currentUser = result.user;
       sessionStorage.removeItem("goodtable:profile-draft");

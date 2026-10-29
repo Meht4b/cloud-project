@@ -26,6 +26,9 @@ export const handler = async (event) => {
   try {
     const method = event.requestContext?.http?.method || event.httpMethod || "GET";
     const path = event.rawPath || event.path || "/";
+    // Browser CORS preflight requests do not include a Cognito bearer token.
+    // API Gateway should route OPTIONS separately without the JWT authorizer.
+    if (method === "OPTIONS") return { statusCode: 204, headers: { "access-control-allow-origin": "https://meht4b.github.io", "access-control-allow-methods": "GET,POST,OPTIONS,PATCH", "access-control-allow-headers": "authorization,content-type", "access-control-max-age": "600" }, body: "" };
     const q = event.queryStringParameters || {};
     const claims = event.requestContext?.authorizer?.jwt?.claims || {};
     const userId = claims.sub;
@@ -38,7 +41,7 @@ export const handler = async (event) => {
       const input = body(event), role = input.role;
       if (!["restaurant", "partner"].includes(role)) return bad(400, "Choose Restaurant or Community partner.");
       const pin = coords(input.latitude, input.longitude);
-      const profile = { userId, email: clean(claims.email,254).toLowerCase(), role, name: clean(input.name,100), phone: clean(input.phone,30), city: clean(input.city,100), address: clean(input.address,200), postalCode: clean(input.postalCode,20), ...pin, createdAt: now() };
+      const profile = { userId, email: clean(claims.email || input.email,254).toLowerCase(), role, name: clean(input.name,100), phone: clean(input.phone,30), city: clean(input.city,100), address: clean(input.address,200), postalCode: clean(input.postalCode,20), ...pin, createdAt: now() };
       if (!profile.email || !profile.name || !profile.city || (role === "restaurant" && !profile.address)) return bad(400, role === "restaurant" ? "Business name, city, and pickup address are required." : "Organization name and city are required.");
       await ddb.send(new PutCommand({ TableName: T.profiles, Item: profile, ConditionExpression: "attribute_not_exists(userId)" })); return json(201, { user: profile });
     }
