@@ -1,3 +1,5 @@
+import { auth, beginSignIn, finishAuthRedirect, signOutFromCognito } from "./auth.js";
+
 const app = document.querySelector("#app");
 const toastNode = document.querySelector("#toast");
 let currentUser = null;
@@ -6,6 +8,8 @@ let authMode = "login";
 let authRole = "partner";
 let discoverFilters = { q: "", category: "", city: "", savedOnly: false };
 let notificationState = { unreadCount: 0, items: [], readAt: null };
+let profileDraft = {};
+const API_URL = (import.meta.env.VITE_API_URL || "https://doxaanle49.execute-api.ap-south-1.amazonaws.com").replace(/\/$/, "");
 
 const esc = (value = "") => String(value).replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]);
 const initials = (name = "GT") => name.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("");
@@ -34,12 +38,13 @@ function saveListing(id) {
 async function api(path, options = {}) {
   let response;
   try {
-    response = await fetch(`/api${path}`, { credentials: "same-origin", ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+    const cognitoUser = await auth.getUser();
+    response = await fetch(`${API_URL}/api${path}`, { ...options, headers: { "Content-Type": "application/json", ...(cognitoUser?.access_token ? { Authorization: `Bearer ${cognitoUser.access_token}` } : {}), ...(options.headers || {}) } });
   } catch {
-    throw new Error("Could not reach GoodTable. Start the local server with node server.mjs.");
+    throw new Error("Could not reach GoodTable. Check your connection and try again.");
   }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "The request could not be completed.");
+  if (!response.ok) { const error = new Error(payload.error || "The request could not be completed."); error.status = response.status; error.payload = payload; throw error; }
   return payload;
 }
 
@@ -53,22 +58,21 @@ function toast(message, kind = "") {
 function brand() { return `<a class="brand" href="#/" aria-label="GoodTable home"><span class="brand-mark"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 26c-6.1-3.8-9.2-8.2-9.2-13.1 0-3.2 2.2-5.5 5.1-5.5 2 0 3.4 1 4.1 2.6.7-1.6 2.1-2.6 4.1-2.6 2.9 0 5.1 2.3 5.1 5.5C25.2 17.8 22.1 22.2 16 26Z"/><path d="M16 23V11"/></svg></span><span>goodtable<span class="brand-period">.</span></span></a>`; }
 
 function renderAuth() {
-  const isSignup = authMode === "signup";
+  const isProfile = authMode === "profile";
+  const isSignup = authMode === "signup" || isProfile;
   app.innerHTML = `<main class="auth-layout">
     <section class="auth-story"><div class="auth-story-inner">${brand()}<div class="story-copy"><div class="story-tag"><i></i> GOOD FOOD. BETTER TOGETHER.</div><h1>Make good food<br>go further.</h1><p>Every meal saved is a little more hope on someone's table and a little less waste in our world.</p><div class="story-impact"><div><strong>1,284</strong><span>meals rescued</span></div><b></b><div><strong>32</strong><span>local partners</span></div><b></b><div><strong>486 kg</strong><span>food diverted</span></div></div><div class="food-orbit"><span class="orbit-circle circle-one"></span><span class="orbit-circle circle-two"></span><span class="orbit-emoji emoji-one">🥑</span><span class="orbit-emoji emoji-two">🍅</span><span class="orbit-emoji emoji-three">🥕</span><span class="orbit-emoji emoji-four">🥬</span><span class="orbit-center">♡</span></div><div class="story-caption">A community-powered food rescue network <span>✳</span></div></div></div></section>
-    <section class="auth-panel"><div class="auth-card"><div class="auth-mobile-brand">${brand()}</div><div class="auth-heading"><span class="section-kicker">${isSignup ? "JOIN THE COMMUNITY" : "WELCOME BACK"}</span><h2>${isSignup ? "Create your account" : "Sign in to GoodTable"}</h2><p>${isSignup ? "Choose your role and let's make a difference together." : "Pick up where your community left off."}</p></div>
-      <div class="auth-tabs"><button class="${!isSignup ? "active" : ""}" data-auth-mode="login">Sign in</button><button class="${isSignup ? "active" : ""}" data-auth-mode="signup">Create account</button></div>
+    <section class="auth-panel"><div class="auth-card"><div class="auth-mobile-brand">${brand()}</div><div class="auth-heading"><span class="section-kicker">${isProfile ? "ONE LAST STEP" : isSignup ? "JOIN THE COMMUNITY" : "WELCOME BACK"}</span><h2>${isProfile ? "Complete your profile" : isSignup ? "Create your account" : "Sign in to GoodTable"}</h2><p>${isProfile ? "Choose your role and add your organization details." : isSignup ? "Choose your role and let's make a difference together." : "Continue securely with your GoodTable account."}</p></div>
+      ${!isProfile ? `<div class="auth-tabs"><button class="${authMode === "login" ? "active" : ""}" data-auth-mode="login">Sign in</button><button class="${authMode === "signup" ? "active" : ""}" data-auth-mode="signup">Create account</button></div>` : ""}
       ${isSignup ? `<div class="role-select" role="group" aria-label="Choose account type"><button data-role="restaurant" class="${authRole === "restaurant" ? "selected" : ""}"><span>♧</span><b>Restaurant</b><small>Share surplus food</small></button><button data-role="partner" class="${authRole === "partner" ? "selected" : ""}"><span>♡</span><b>Community partner</b><small>Find and collect food</small></button></div>` : ""}
       <form id="authForm" class="auth-form">
-        ${isSignup ? `<label>${authRole === "restaurant" ? "Restaurant or business name" : "Organization name"}<input name="name" required placeholder="${authRole === "restaurant" ? "e.g. Green Basket Market" : "e.g. Amara's Community Kitchen"}" autocomplete="organization"></label>` : ""}
-        <label>Email address<input name="email" type="email" required autocomplete="email" placeholder="you@organization.com" value="${isSignup ? "" : ""}"></label>
-        ${isSignup ? `<label>Phone number <span class="optional">Optional</span><input name="phone" type="tel" autocomplete="tel" placeholder="+91 98765 43210"></label>` : ""}
-        <label>Password<input name="password" type="password" minlength="${isSignup ? "10" : "1"}" required autocomplete="${isSignup ? "new-password" : "current-password"}" placeholder="${isSignup ? "At least 10 characters" : "Enter your password"}"></label>
-        ${isSignup ? `<div class="form-section-label"><span>Pickup area</span><i></i></div><div class="field-grid"><label>City<input name="city" required placeholder="Bengaluru" autocomplete="address-level2"></label><label>Postal code <span class="optional">Optional</span><input name="postalCode" placeholder="560001" autocomplete="postal-code"></label></div>${authRole === "restaurant" ? `<label>Restaurant pickup address<input name="address" required placeholder="Street address, building, area" autocomplete="street-address"></label><div class="field-grid coordinate-grid"><label>Latitude <span class="optional">Map pin</span><input name="latitude" type="number" step="any" placeholder="12.9716"></label><label>Longitude <span class="optional">Map pin</span><input name="longitude" type="number" step="any" placeholder="77.5946"></label></div><button type="button" class="location-detect" data-geolocate>⌖ Use device location</button>` : ""}` : ""}
-        <button class="primary-button auth-submit" type="submit">${isSignup ? "Create account" : "Sign in"}<span>→</span></button>
+        ${isSignup ? `<label>${authRole === "restaurant" ? "Restaurant or business name" : "Organization name"}<input name="name" required value="${esc(profileDraft.name || "")}" placeholder="${authRole === "restaurant" ? "e.g. Green Basket Market" : "e.g. Amara's Community Kitchen"}" autocomplete="organization"></label>` : ""}
+        ${isSignup ? `<label>Phone number <span class="optional">Optional</span><input name="phone" type="tel" value="${esc(profileDraft.phone || "")}" autocomplete="tel" placeholder="+91 98765 43210"></label>` : `<p class="field-hint">You’ll enter your email and password on Cognito’s secure sign-in page.</p>`}
+        ${isSignup ? `<div class="form-section-label"><span>Pickup area</span><i></i></div><div class="field-grid"><label>City<input name="city" required value="${esc(profileDraft.city || "")}" placeholder="Bengaluru" autocomplete="address-level2"></label><label>Postal code <span class="optional">Optional</span><input name="postalCode" value="${esc(profileDraft.postalCode || "")}" placeholder="560001" autocomplete="postal-code"></label></div>${authRole === "restaurant" ? `<label>Restaurant pickup address<input name="address" required value="${esc(profileDraft.address || "")}" placeholder="Street address, building, area" autocomplete="street-address"></label><div class="field-grid coordinate-grid"><label>Latitude <span class="optional">Map pin</span><input name="latitude" type="number" step="any" value="${esc(profileDraft.latitude || "")}" placeholder="12.9716"></label><label>Longitude <span class="optional">Map pin</span><input name="longitude" type="number" step="any" value="${esc(profileDraft.longitude || "")}" placeholder="77.5946"></label></div><button type="button" class="location-detect" data-geolocate>⌖ Use device location</button>` : ""}` : ""}
+        <button class="primary-button auth-submit" type="submit">${isProfile ? "Save profile" : isSignup ? "Continue to secure sign-up" : "Continue to secure sign-in"}<span>→</span></button>
         <p class="auth-error" id="authError" aria-live="polite"></p>
       </form>
-      ${!isSignup ? `<div class="demo-box"><div><span class="demo-icon">✳</span><div><b>Try a demo account</b><small>Explore both sides of the network</small></div></div><div class="demo-actions"><button data-demo="partner">Community partner <span>↗</span></button><button data-demo="restaurant">Restaurant <span>↗</span></button></div><small class="demo-hint">Demo password: <code>GoodTableDemo!26</code></small></div>` : `<div class="auth-terms">By creating an account, you agree to share accurate food, allergen, and pickup information.</div>`}
+      ${isSignup ? `<div class="auth-terms">${isProfile ? "Your profile is stored securely with GoodTable." : "Cognito will securely collect your sign-in details."}</div>` : ""}
     </div><footer class="auth-footer">GoodTable · Community-powered food rescue <span>♡</span></footer></section>
   </main>`;
 }
@@ -251,7 +255,7 @@ document.addEventListener("click", async (event) => {
     catch (error) { setAuthError(error.message); }
     return;
   }
-  if (event.target.closest("[data-signout]")) { await api("/auth/logout", { method: "POST", body: "{}" }); currentUser = null; authMode = "login"; location.hash = "#/"; renderAuth(); return; }
+  if (event.target.closest("[data-signout]")) { await signOutFromCognito(); return; }
   if (event.target.closest("[data-create-listing]")) { document.body.insertAdjacentHTML("beforeend", modalListing()); return; }
   if (event.target.closest("[data-close-modal]") || event.target.id === "listingModal") { document.querySelector("#listingModal")?.remove(); return; }
   const claim = event.target.closest("[data-claim]");
@@ -299,10 +303,21 @@ document.addEventListener("submit", async (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
     const body = Object.fromEntries(form.entries());
-    if (authMode === "signup") body.role = authRole;
-    const endpoint = authMode === "signup" ? "/auth/register" : "/auth/login";
     const button = event.target.querySelector("button[type=submit]"); button.disabled = true; setAuthError("");
-    try { const result = await api(endpoint, { method: "POST", body: JSON.stringify(body) }); currentUser = result.user; location.hash = "#/overview"; await renderRoute(); }
+    try {
+      if (authMode === "login") { await beginSignIn(); return; }
+      if (authMode === "signup") {
+        profileDraft = { ...body, role: authRole };
+        sessionStorage.setItem("goodtable:profile-draft", JSON.stringify(profileDraft));
+        await beginSignIn();
+        return;
+      }
+      const result = await api("/me", { method: "POST", body: JSON.stringify({ ...body, role: authRole }) });
+      currentUser = result.user;
+      sessionStorage.removeItem("goodtable:profile-draft");
+      location.hash = "#/overview";
+      await renderRoute();
+    }
     catch (error) { setAuthError(error.message); button.disabled = false; }
   }
   if (event.target.id === "listingForm") {
@@ -339,11 +354,34 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
+async function startGoodTable() {
 try {
-  const result = await api("/me"); currentUser = result.user;
-  if (!location.hash) location.hash = "#/overview";
-  await renderRoute();
-} catch {
-  authMode = "login";
-  renderAuth();
+  const cognitoUser = await finishAuthRedirect();
+  if (cognitoUser) {
+    try {
+      const result = await api("/me");
+      currentUser = result.user;
+    } catch (error) {
+      if (error.status !== 404 || !error.payload?.profileRequired) throw error;
+      try { profileDraft = JSON.parse(sessionStorage.getItem("goodtable:profile-draft") || "{}"); } catch { profileDraft = {}; }
+      authRole = profileDraft.role || "partner";
+      authMode = "profile";
+      renderAuth();
+      throw Object.assign(new Error("Complete your GoodTable profile to continue."), { profileFormRequired: true });
+    }
+    if (!location.hash) location.hash = "#/overview";
+    await renderRoute();
+  } else {
+    authMode = "login";
+    renderAuth();
+  }
+} catch (error) {
+  if (!error.profileFormRequired) {
+    authMode = "login";
+    renderAuth();
+    if (error.message) setAuthError(error.message);
+  }
 }
+}
+
+startGoodTable();
